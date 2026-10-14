@@ -1,0 +1,44 @@
+# Workers: expiry + payment reconcile run on every replica (SKIP LOCKED);
+# outbox relay + gate resync are leader-elected via Postgres advisory locks,
+# so the 2nd/3rd replica is a hot standby that takes over within seconds.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: booking-worker, namespace: booking }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: booking-worker } }
+  template:
+    metadata:
+      labels: { app: booking-worker }
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8081" }
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: DoNotSchedule, labelSelector: { matchLabels: { app: booking-worker } } }
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: ghcr.io/example/booking-service:latest
+          args: ["worker"]
+          envFrom:
+            - configMapRef: { name: booking-config }
+            - secretRef: { name: booking-secrets }
+          env:
+            # Advisory-lock leadership needs session semantics: connect directly, not via PgBouncer.
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: booking-secrets, key: DATABASE_DIRECT_URL } }
+            - { name: DB_MAX_CONNS, value: "10" }
+          resources:
+            requests: { cpu: 250m, memory: 128Mi }
+            limits: { cpu: "1", memory: 256Mi }
+          livenessProbe:
+            httpGet: { path: /livez, port: 8081 }
+            periodSeconds: 10
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: booking-worker, namespace: booking }
+spec:
+  maxUnavailable: 1
+  selector: { matchLabels: { app: booking-worker } }

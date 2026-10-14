@@ -1,0 +1,17 @@
+{
+  "name": "notification-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Consumes booking events from Kafka with de-duplication, retries and a dead-letter topic",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "pg": "^8.13.1"
+  }
+}

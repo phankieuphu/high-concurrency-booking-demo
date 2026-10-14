@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: booking
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: booking-config
+  namespace: booking
+data:
+  # Point these at the managed services of your cloud (see docs/cloud/*.md).
+  REDIS_ADDRS: "redis-cluster.booking.internal:6379"
+  KAFKA_BROKERS: "kafka-1.booking.internal:9092,kafka-2.booking.internal:9092,kafka-3.booking.internal:9092"
+  KAFKA_TOPIC: booking.events
+  HOLD_TTL: 10m
+  PAYMENT_WINDOW: 2m
+  DB_MAX_CONNS: "40"
+  DB_WRITE_CONCURRENCY: "48"
+  MAX_IN_FLIGHT: "2000"
+  ADMIT_RATE_PER_SEC: "2000"
+---
+# Example only: in production these come from AWS Secrets Manager / GCP Secret
+# Manager / Azure Key Vault via the External Secrets Operator or CSI driver.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: booking-secrets
+  namespace: booking
+type: Opaque
+stringData:
+  DATABASE_URL: postgres://booking:CHANGE_ME@pgbouncer.booking.internal:6432/booking?sslmode=require
+  DATABASE_DIRECT_URL: postgres://booking:CHANGE_ME@db-primary.booking.internal:5432/booking?sslmode=require
+  DATABASE_REPLICA_URL: postgres://booking:CHANGE_ME@db-reader.booking.internal:5432/booking?sslmode=require
+  INTERNAL_TOKEN: CHANGE_ME
+  ADMIN_KEY: CHANGE_ME
+  JWT_SECRET: CHANGE_ME
+  QUEUE_SECRET: CHANGE_ME

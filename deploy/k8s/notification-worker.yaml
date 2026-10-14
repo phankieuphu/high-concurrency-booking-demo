@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: notification-worker, namespace: booking }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: notification-worker } }
+  template:
+    metadata:
+      labels: { app: notification-worker }
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: worker
+          image: ghcr.io/example/notification-worker:latest
+          env:
+            - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: booking-secrets, key: DATABASE_URL } } }
+            - { name: KAFKA_BROKERS, valueFrom: { configMapKeyRef: { name: booking-config, key: KAFKA_BROKERS } } }
+          resources:
+            requests: { cpu: 250m, memory: 192Mi }
+            limits: { cpu: "1", memory: 384Mi }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+# Scale on consumer lag, not CPU (requires KEDA). Max replicas = partitions.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: notification-worker, namespace: booking }
+spec:
+  scaleTargetRef: { name: notification-worker }
+  minReplicaCount: 3
+  maxReplicaCount: 24
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka-1.booking.internal:9092
+        consumerGroup: notification-worker
+        topic: booking.events
+        lagThreshold: "1000"

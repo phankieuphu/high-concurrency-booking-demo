@@ -1,0 +1,24 @@
+# Run before each rollout (e.g. Argo CD PreSync hook / Helm pre-upgrade).
+# Concurrent runs are safe: migrations serialise on a Postgres advisory lock.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: booking-migrate
+  namespace: booking
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: migrate
+          image: ghcr.io/example/booking-service:latest
+          args: ["migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: booking-secrets, key: DATABASE_DIRECT_URL } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
