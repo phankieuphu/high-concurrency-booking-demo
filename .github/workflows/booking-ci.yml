@@ -1,0 +1,65 @@
+name: booking-ci
+
+on:
+  push:
+    paths: ["services/**", ".github/workflows/booking-ci.yml"]
+  pull_request:
+    paths: ["services/**", ".github/workflows/booking-ci.yml"]
+
+jobs:
+  booking-service:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: booking, POSTGRES_PASSWORD: booking, POSTGRES_DB: booking }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U booking" --health-interval 2s --health-retries 30
+      redis:
+        image: redis:7.2-alpine
+        ports: ["6379:6379"]
+    defaults:
+      run: { working-directory: services/booking-service }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: services/booking-service/go.mod, cache-dependency-path: services/booking-service/go.sum }
+      - run: go vet ./...
+      - name: Unit + concurrency integration tests (race detector)
+        env:
+          BOOKING_TEST_DATABASE_URL: postgres://booking:booking@localhost:5432/booking?sslmode=disable
+          BOOKING_TEST_REDIS_ADDR: localhost:6379
+        run: go test -race -p 1 -count=1 ./...
+
+  node:
+    runs-on: ubuntu-latest
+    needs: booking-service
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: booking, POSTGRES_PASSWORD: booking, POSTGRES_DB: booking }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U booking" --health-interval 2s --health-retries 30
+      redis:
+        image: redis:7.2-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: services/booking-service/go.mod, cache-dependency-path: services/booking-service/go.sum }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Create schema (booking-service migrations)
+        working-directory: services/booking-service
+        env: { DATABASE_URL: "postgres://booking:booking@localhost:5432/booking?sslmode=disable" }
+        run: go run ./cmd/booking migrate
+      - name: gateway
+        working-directory: services/gateway
+        env: { TEST_REDIS_URL: "redis://localhost:6379/15" }
+        run: npm ci && npm test
+      - name: notification-worker
+        working-directory: services/notification-worker
+        env: { TEST_DATABASE_URL: "postgres://booking:booking@localhost:5432/booking" }
+        run: npm ci && npm test

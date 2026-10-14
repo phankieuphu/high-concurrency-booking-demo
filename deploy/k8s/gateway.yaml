@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gateway, namespace: booking }
+spec:
+  replicas: 10
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 25% }
+  selector: { matchLabels: { app: gateway } }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: DoNotSchedule, labelSelector: { matchLabels: { app: gateway } } }
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: gateway
+          image: ghcr.io/example/booking-gateway:latest
+          ports: [{ containerPort: 8080, name: http }]
+          envFrom:
+            - configMapRef: { name: booking-config }
+          env:
+            - { name: BOOKING_URL, value: "http://booking-api.booking.svc.cluster.local:8081" }
+            - { name: REDIS_URL, value: "redis://redis-cluster.booking.internal:6379" }
+            - { name: INTERNAL_TOKEN, valueFrom: { secretKeyRef: { name: booking-secrets, key: INTERNAL_TOKEN } } }
+            - { name: JWT_SECRET, valueFrom: { secretKeyRef: { name: booking-secrets, key: JWT_SECRET } } }
+            - { name: QUEUE_SECRET, valueFrom: { secretKeyRef: { name: booking-secrets, key: QUEUE_SECRET } } }
+            - { name: MAX_IN_FLIGHT, value: "3000" }
+            - { name: NODE_OPTIONS, value: "--max-old-space-size=384" }
+          resources:
+            # Node is single-threaded: many 1-CPU pods beat a few big ones.
+            requests: { cpu: "1", memory: 384Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 10
+          lifecycle:
+            # Keep serving while the LB deregisters us.
+            preStop: { exec: { command: ["sleep", "5"] } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gateway, namespace: booking }
+spec:
+  selector: { app: gateway }
+  ports: [{ port: 80, targetPort: http, name: http }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: gateway, namespace: booking }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: gateway }
+  minReplicas: 10
+  maxReplicas: 120
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 55 } }
+  behavior:
+    scaleUp: { stabilizationWindowSeconds: 0, policies: [{ type: Percent, value: 200, periodSeconds: 15 }] }
+    scaleDown: { stabilizationWindowSeconds: 600 }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: gateway, namespace: booking }
+spec:
+  minAvailable: 80%
+  selector: { matchLabels: { app: gateway } }
